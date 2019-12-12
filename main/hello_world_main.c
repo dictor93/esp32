@@ -36,14 +36,14 @@
 #define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
 #define ADC_TIMER_INTERVAL    (0.000003125)   // sample test interval for the second timer
 #define ADC_TIMER             TIMER_0        // testing will be done with auto reload
-#define RENDER_TIMER_INTERVAL (1.0/30)
+#define RENDER_TIMER_INTERVAL (1.0/24)
 #define RENDER_TIMER          TIMER_1
 
 #define DEFAULT_VREF    5000        //Use adc2_vref_to_gpio() to obtain a better estimate
-#define SAMPLES         1024
-#define ADC_ACCURACY    2
+#define SAMPLES         512
+#define ADC_ACCURACY    1
 
-#define SMOOTH 0.3
+#define SMOOTH 0.5
 
 struct led_state new_state;
 static esp_adc_cal_characteristics_t *adc_chars;
@@ -51,7 +51,7 @@ static const adc_channel_t channel = ADC_CHANNEL_6;     //GPIO34 if ADC1, GPIO14
 static const adc_atten_t atten = ADC_ATTEN_DB_0;
 static const adc_unit_t unit = ADC_UNIT_1;
 float wind[SAMPLES];
-int posOffset[17] = {(int)(SAMPLES/64/2), (int)(SAMPLES/39.38/2), (int)(SAMPLES/30.12/2), (int)(SAMPLES/20.48/2), (int)(SAMPLES/15.51/2), (int)(SAMPLES/12.19/2), (int)(SAMPLES/10.24/2), (int)(SAMPLES/8.83/2), (int)(SAMPLES/7.64), (int)(SAMPLES/6.17/2), (int)(SAMPLES/4.92/2), (int)(SAMPLES/4.1/2), (int)(SAMPLES/3.51/2), (int)(SAMPLES/2.1/2), (int)(SAMPLES/1.54/2), (int)(SAMPLES/1.25/2), (int)(SAMPLES/2)};
+int posOffset[17] = {(int)(SAMPLES/64/3), (int)(SAMPLES/39.38/3), (int)(SAMPLES/30.12/3), (int)(SAMPLES/20.48/3), (int)(SAMPLES/15.51/3), (int)(SAMPLES/12.19/3), (int)(SAMPLES/10.24/3), (int)(SAMPLES/8.83/3), (int)(SAMPLES/7.64), (int)(SAMPLES/6.17/3), (int)(SAMPLES/4.92/3), (int)(SAMPLES/4.1/3), (int)(SAMPLES/3.51/3), (int)(SAMPLES/2.1/3), (int)(SAMPLES/1.54/3), (int)(SAMPLES/1.25/3), (int)(SAMPLES/3)};
 float posLevel_old[16];
 
 static void check_efuse()
@@ -75,13 +75,12 @@ typedef struct {
     uint64_t timer_counter_value;
 } timer_event_t;
 
-xQueueHandle timer_queue;
 xQueueHandle render_queue;
 
 
 float arrToPrint[16];
 
-void printToLed(float *arrToPrint) {
+void printToLed() {
     // int datA[16] = {16, 8,9,3,7,8,6,1,5,6,3,4,2,7,5,6};
     for (int y = 0; y < HEIGHT; y++) {
       for (int x = 0; x < WIDTH; x++)
@@ -90,7 +89,7 @@ void printToLed(float *arrToPrint) {
       }
     }
     for (int y = 0; y < HEIGHT; y++) {
-      int max = arrToPrint[y];
+      int max = arrToPrint[y]; //> 16 ? 16 : arrToPrint[y];
       int middle = (int)max/2;
       for (int x = 0; x < max; x++)
       {
@@ -102,7 +101,6 @@ void printToLed(float *arrToPrint) {
         }
       }
     }
-    printf("NUM_LEDS: %d", NUM_LEDS);
     ws2812_write_leds(new_state);
 }
 
@@ -124,15 +122,15 @@ void convert_fft(float *data_array) {
             max = real_fft_plan->output[i];
         }
     }
-    float divider = max/HEIGHT;
+    float maxPos = 0;
     for (int pos = 0; pos < 16; pos++)
     {
-        int posLevel = real_fft_plan->output[posOffset[pos]];
+        float posLevel = real_fft_plan->output[posOffset[pos]];
         int linesBetween;
         if (pos > 0 && pos < 16) {
             linesBetween = posOffset[pos] - posOffset[pos - 1];
             for (int i = 0; i < linesBetween; i++) {  // от предыдущей полосы до текущей
-                posLevel += (float) ((float)i / linesBetween) * real_fft_plan->output[posOffset[pos] - linesBetween + i];
+                posLevel += (float)real_fft_plan->output[posOffset[pos] - linesBetween + i]/linesBetween;
             }
         }
 
@@ -140,13 +138,19 @@ void convert_fft(float *data_array) {
         //      if (posLevel > maxValue) maxValue = posLevel;
 
         // фильтрация длины столбиков, для их плавного движения
-        arrToPrint[pos] = (posLevel * SMOOTH + posLevel_old[pos] * (1 - SMOOTH))/divider;
-        // olprintf("attToPrint: %f, pos: %i\n", arrToPrint[pos], pos);
+        
+        arrToPrint[pos] = (posLevel * SMOOTH + posLevel_old[pos] * (1 - SMOOTH));
         posLevel_old[pos] = arrToPrint[pos];
+        if(arrToPrint[pos] > maxPos) (maxPos = arrToPrint[pos]);
     }
-    // printf("attToPrint: %f\n", arrToPrint[8]);
+    float divider = maxPos > 16 ? maxPos/16 : 1;
+    for (int pos = 0; pos < 16; pos++) {
+        arrToPrint[pos] = arrToPrint[pos]/divider;
+        printf("Normalised: %f\n", arrToPrint[pos]);
+    }
+
     fft_destroy(real_fft_plan);
-    printToLed(arrToPrint);
+    printToLed();
 
     
 }
@@ -189,7 +193,6 @@ void IRAM_ATTR timer_isr(void *para)
                 adc_copy[i] = adc_reading[i];
             }
             
-            xQueueSendFromISR(timer_queue, &evt, NULL);
         }
     } else if ((intr_status & BIT(timer_idx)) && timer_idx == RENDER_TIMER) {
         timer_counter_value += (uint64_t) (RENDER_TIMER_INTERVAL * TIMER_SCALE);
@@ -224,20 +227,6 @@ static void example_tg0_timer_init(int timer_idx, double timer_interval_sec)
 }
 
 float floatArray[SAMPLES];
-static void timer_example_evt_task(void *arg)
-{
-    while (1) {
-        timer_event_t evt;
-        xQueueReceive(timer_queue, &evt, portMAX_DELAY);
-        
-        if (evt.type == ADC_TIMER) {
-            // printf("ADC_TIMER RetUrN\n");
-            timer_start(evt.timer_group, evt.timer_idx);
-        } else {
-            printf("\n    UNKNOWN EVENT TYPE\n");
-        }
-    }
-}
 
 static void render_task(void *arg){
      while (1) {
@@ -249,9 +238,7 @@ static void render_task(void *arg){
             for (int i = 0; i < SAMPLES; i++){
                 floatArray[i] = (float)adc_copy[i]/4095;
             }
-            // printToLed();
             convert_fft(floatArray);
-            // printf("RENDER\n");
         } else {
             printf("\n    UNKNOWN EVENT TYPE\n");
         }
@@ -278,17 +265,15 @@ void app_main()
         return;
     }
 
-    dsps_wind_hann_f32(wind, SAMPLES);
+    dsps_wind_blackman_f32(wind, SAMPLES);
 
 
     adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
     esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, ADC_WIDTH_BIT_12, DEFAULT_VREF, adc_chars);
 
     ws2812_control_init();
-    timer_queue = xQueueCreate(10, sizeof(timer_event_t));
     render_queue = xQueueCreate(10, sizeof(timer_event_t));
-    // example_tg0_timer_init(ADC_TIMER,    ADC_TIMER_INTERVAL);
+    example_tg0_timer_init(ADC_TIMER,    ADC_TIMER_INTERVAL);
     example_tg0_timer_init(RENDER_TIMER, RENDER_TIMER_INTERVAL);
-    // xTaskCreate(timer_example_evt_task, "timer_evt_task", 2048, NULL, 5, NULL);
     xTaskCreatePinnedToCore(render_task, "render_event_task", 4096, NULL, 1, NULL, 1);
 }
