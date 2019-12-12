@@ -36,7 +36,7 @@
 #define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
 #define ADC_TIMER_INTERVAL    (0.000003125)   // sample test interval for the second timer
 #define ADC_TIMER             TIMER_0        // testing will be done with auto reload
-#define RENDER_TIMER_INTERVAL (1.0/0.2)
+#define RENDER_TIMER_INTERVAL (1.0/30)
 #define RENDER_TIMER          TIMER_1
 
 #define DEFAULT_VREF    5000        //Use adc2_vref_to_gpio() to obtain a better estimate
