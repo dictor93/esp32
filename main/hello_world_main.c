@@ -81,8 +81,8 @@ xQueueHandle render_queue;
 
 float arrToPrint[16];
 
-void printToLed() {
-    int datA[16] = {16, 8,9,3,7,8,6,1,5,6,3,4,2,7,5,6};
+void printToLed(float *arrToPrint) {
+    // int datA[16] = {16, 8,9,3,7,8,6,1,5,6,3,4,2,7,5,6};
     for (int y = 0; y < HEIGHT; y++) {
       for (int x = 0; x < WIDTH; x++)
       {
@@ -90,7 +90,7 @@ void printToLed() {
       }
     }
     for (int y = 0; y < HEIGHT; y++) {
-      int max = datA[y];
+      int max = arrToPrint[y];
       int middle = (int)max/2;
       for (int x = 0; x < max; x++)
       {
@@ -249,8 +249,8 @@ static void render_task(void *arg){
             for (int i = 0; i < SAMPLES; i++){
                 floatArray[i] = (float)adc_copy[i]/4095;
             }
-            printToLed();
-            // convert_fft(floatArray);
+            // printToLed();
+            convert_fft(floatArray);
             // printf("RENDER\n");
         } else {
             printf("\n    UNKNOWN EVENT TYPE\n");
